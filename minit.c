@@ -56,7 +56,7 @@ static void handle_child(int sig) {
 
 static void handle_termination(int sig) {
     terminate++;
-    if (terminate == 1) {
+    if (terminate == 1 && getpid() == 1) {
         kill(-1, SIGTERM);
     }
 }
@@ -112,23 +112,11 @@ int main(int argc, char *argv[]) {
     setup_signals(&default_mask);
 
     const char *startup = (argc > 1 && *argv[1] ? argv[1] : default_startup);
-    //const char *shutdown = (argc > 2 && *argv[2] ? argv[2] : default_shutdown);
 
     run(startup, default_mask);
 
-    /*
-    while(!terminate)
-        sigsuspend(&suspend_mask);
-
-    shutdown_pid = run(shutdown, default_mask);
-    while(shutdown_pid > 0)
-        sigsuspend(&suspend_mask);
-*/
-    // If we're running as a regular process (not init), don't kill -1.
-    if(getpid() == 1) {
-        //kill(-1, SIGTERM);
-        while(wait(NULL) > 0)
-            continue;
+    while(wait(NULL) > 0) {
+        continue;
     }
 
     return 0;
