@@ -55,7 +55,10 @@ static void handle_child(int sig) {
 }
 
 static void handle_termination(int sig) {
-    terminate = 1;
+    terminate++;
+    if (terminate == 1) {
+        kill(-1, SIGTERM);
+    }
 }
 
 static sigset_t setup_signals(sigset_t *out_default_mask) {
@@ -106,23 +109,24 @@ static pid_t run(const char *filename, sigset_t child_mask) {
 
 int main(int argc, char *argv[]) {
     sigset_t default_mask;
-    sigset_t suspend_mask = setup_signals(&default_mask);
+    setup_signals(&default_mask);
 
     const char *startup = (argc > 1 && *argv[1] ? argv[1] : default_startup);
-    const char *shutdown = (argc > 2 && *argv[2] ? argv[2] : default_shutdown);
+    //const char *shutdown = (argc > 2 && *argv[2] ? argv[2] : default_shutdown);
 
     run(startup, default_mask);
 
+    /*
     while(!terminate)
         sigsuspend(&suspend_mask);
 
     shutdown_pid = run(shutdown, default_mask);
     while(shutdown_pid > 0)
         sigsuspend(&suspend_mask);
-
+*/
     // If we're running as a regular process (not init), don't kill -1.
     if(getpid() == 1) {
-        kill(-1, SIGTERM);
+        //kill(-1, SIGTERM);
         while(wait(NULL) > 0)
             continue;
     }
