@@ -34,31 +34,45 @@
 #ifndef DEFAULT_SHUTDOWN
 #define DEFAULT_SHUTDOWN "/etc/minit/shutdown"
 #endif
+#ifndef DEFAULT_RELOAD
+#define DEFAULT_RELOAD "/etc/minit/reload"
+#endif
 
 
 static const char *const default_startup = DEFAULT_STARTUP;
 static const char *const default_shutdown = DEFAULT_SHUTDOWN;
+static const char *const default_reload = DEFAULT_RELOAD;
 
 static volatile pid_t shutdown_pid = 0;
+static volatile pid_t reload_pid = 0;
+
 static volatile int terminate = 0;
+static volatile int reload = 0;
 
 
 static void handle_child(int sig) {
     int saved_errno = errno;
+    pid_t pid;
 
-    for(pid_t pid; (pid = waitpid(-1, NULL, WNOHANG)) > 0; ) {
+    for(; (pid = waitpid(-1, NULL, WNOHANG)) > 0; ) {
         if(pid == shutdown_pid)
             shutdown_pid = 0;
+        if(pid == reload_pid)
+            reload_pid = 0;
     }
+
+    if(pid == -1)
+        terminate = 1;
 
     errno = saved_errno;
 }
 
 static void handle_termination(int sig) {
-    terminate++;
-    if (terminate == 1 && getpid() == 1) {
-        kill(-1, SIGTERM);
-    }
+    terminate = 1;
+}
+
+static void handle_reload(int sig) {
+    reload = 1;
 }
 
 static sigset_t setup_signals(sigset_t *out_default_mask) {
@@ -83,6 +97,11 @@ static sigset_t setup_signals(sigset_t *out_default_mask) {
     sigdelset(&suspend_mask, SIGINT);
 
     // TODO: also handle SIGUSR1/2, maybe run another script/s?
+    action.sa_handler = handle_reload;
+    sigaction(SIGUSR1, &action, NULL);
+    sigaction(SIGHUP, &action, NULL);
+    sigdelset(&suspend_mask, SIGUSR1);
+    sigdelset(&suspend_mask, SIGHUP);
 
     return suspend_mask;
 }
@@ -97,9 +116,10 @@ static pid_t run(const char *filename, sigset_t child_mask) {
         execlp(filename, filename, NULL);
 
         // Ignore "no such file" errors unless specified by caller.
-        if((filename == default_startup || filename == default_shutdown)
+        if((filename == default_startup || filename == default_shutdown || filename == default_reload)
                 && errno == ENOENT)
             exit(0);
+
         perror(filename);
         exit(1);
     }
@@ -109,14 +129,36 @@ static pid_t run(const char *filename, sigset_t child_mask) {
 
 int main(int argc, char *argv[]) {
     sigset_t default_mask;
-    setup_signals(&default_mask);
+    sigset_t suspend_mask = setup_signals(&default_mask);
 
-    const char *startup = (argc > 1 && *argv[1] ? argv[1] : default_startup);
+    const char *startup_script = (argc > 1 && *argv[1] ? argv[1] : default_startup);
+    const char *shutdown_script = (argc > 2 && *argv[2] ? argv[2] : default_shutdown);
+    const char *reload_script = (argc > 3 && *argv[3] ? argv[3] : default_reload);
 
-    run(startup, default_mask);
+    run(startup_script, default_mask);
 
-    while(wait(NULL) > 0) {
-        continue;
+run_forever:
+    while(!(terminate || reload))
+        sigsuspend(&suspend_mask);
+
+    if(reload) {
+        reload_pid = run(reload_script, default_mask);
+        while(reload_pid > 0)
+            sigsuspend(&suspend_mask);
+
+        reload = 0;
+        goto run_forever;
+    }
+
+    shutdown_pid = run(shutdown_script, default_mask);
+    while(shutdown_pid > 0)
+        sigsuspend(&suspend_mask);
+
+    // If we're running as a regular process (not init), don't kill -1.
+    if(getpid() == 1) {
+        kill(-1, SIGTERM);
+        while(wait(NULL) > 0)
+            continue;
     }
 
     return 0;
